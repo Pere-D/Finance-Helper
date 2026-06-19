@@ -18,6 +18,7 @@ struct DashboardContentView: View {
     
     @Environment(PurchaseManager.self) private var purchases
     @Environment(\.colorScheme) private var colorScheme
+    @Environment(\.horizontalSizeClass) private var horizontalSizeClass
     
     @State private var viewModel = DashboardViewModel()
     @State private var showingAccounts = false
@@ -52,12 +53,7 @@ struct DashboardContentView: View {
     }
 
     var body: some View {
-        VStack(spacing: 12) {
-            netWorthCard
-            wealthChartPagedCard
-                .layoutPriority(1)
-            goalsCard
-        }
+        contentLayout
         .padding(.horizontal)
         .padding(.top, 4)
         .padding(.bottom, 12)
@@ -120,6 +116,28 @@ struct DashboardContentView: View {
                 await viewModel.fetchExchangeRates()
                 viewModel.writeWidgetSnapshot()
                 refreshChartData()
+            }
+        }
+    }
+
+    // MARK: - Adaptive Layout
+
+    @ViewBuilder
+    private var contentLayout: some View {
+        if horizontalSizeClass == .regular {
+            VStack(spacing: 12) {
+                netWorthCard
+                wealthChartPagedCard
+                    .frame(height: 420)
+                goalsCard
+                Spacer()
+            }
+        } else {
+            VStack(spacing: 12) {
+                netWorthCard
+                wealthChartPagedCard
+                    .layoutPriority(1)
+                goalsCard
             }
         }
     }

@@ -6,14 +6,14 @@ import Observation
 @Observable
 final class PurchaseManager {
 
-    static let productIDMonthly  = "financehelper_pro_monthly"
-    static let productIDAnnual   = "financehelper_pro_annual"
+    static let productIDMonthly  = "ch.financehelper.pro.monthly"
+    static let productIDAnnual   = "ch.financehelper.pro.annual"
     static let productIDLifetime = "financehelper_pro_lifetime"
     static let allProductIDs: [String] = [productIDMonthly, productIDAnnual, productIDLifetime]
 
     #if DEBUG
     /// Flip to `false` to test the free-tier experience in debug builds.
-    private static let simulatePremium = false
+    private static let simulatePremium = true
     #endif
 
     // TestFlight builds use a sandboxReceipt — unlock premium automatically for testers
