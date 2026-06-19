@@ -13,7 +13,7 @@ final class PurchaseManager {
 
     #if DEBUG
     /// Flip to `false` to test the free-tier experience in debug builds.
-    private static let simulatePremium = true
+    private static let simulatePremium = false
     #endif
 
     // TestFlight builds use a sandboxReceipt — unlock premium automatically for testers
