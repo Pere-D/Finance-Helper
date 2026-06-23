@@ -18,6 +18,7 @@ struct BankImportView: View {
     @State private var errorMessage: String?
     @State private var showingError = false
     @State private var isParsing = false
+    @State private var lastImportedBank: BankFormat? = nil
 
     private let gridColumns = [GridItem(.flexible(), spacing: 12), GridItem(.flexible(), spacing: 12)]
 
@@ -140,6 +141,20 @@ struct BankImportView: View {
                     }
                     .disabled(selectedBank == nil || isParsing)
                     .padding(.horizontal, 20)
+
+                    if lastImportedBank != nil && !isParsing {
+                        Button { sendImportFeedback() } label: {
+                            HStack(spacing: 6) {
+                                Image(systemName: "exclamationmark.bubble")
+                                    .font(.subheadline)
+                                Text("Ergebnis falsch? Fehler melden")
+                                    .font(.caption.weight(.medium))
+                            }
+                            .foregroundStyle(.secondary)
+                            .padding(.vertical, 4)
+                        }
+                        .buttonStyle(.plain)
+                    }
                 }
                 .padding(.vertical, 16)
             }
@@ -181,6 +196,35 @@ struct BankImportView: View {
                 onImportComplete: { dismiss() }
             )
         }
+    }
+
+    private func sendImportFeedback() {
+        let bankName = (lastImportedBank ?? selectedBank)?.rawValue ?? "Unbekannte Bank"
+        let subject = "FinanceHelper – Falscher Import: \(bankName)"
+        let body = """
+        Hallo,
+
+        beim Import von \(bankName) wurden die Transaktionen falsch eingelesen.
+
+        Bank: \(bankName)
+        Anzahl erkannte Transaktionen: \(transactions.count)
+
+        Was war falsch?
+        (z.B. falsche Vorzeichen, fehlende Transaktionen, falscher Betrag, ...)
+
+        ──────────────────────────────────────────
+        Bitte hänge wenn möglich einen anonymisierten Auszug als Anhang an – ohne Beispieldaten kann der Fehler leider nicht reproduziert und behoben werden.
+
+        Danke!
+        """
+        var components = URLComponents()
+        components.scheme = "mailto"
+        components.path = "support@financehelper.ch"
+        components.queryItems = [
+            URLQueryItem(name: "subject", value: subject),
+            URLQueryItem(name: "body",    value: body)
+        ]
+        if let url = components.url { openURL(url) }
     }
 
     private func sendBankRequest() {
@@ -254,6 +298,7 @@ struct BankImportView: View {
                     transactions = parsed
                     truncatedOriginalCount = nil
                 }
+                lastImportedBank = bank
                 showingAnalysis = true
             } catch {
                 url.stopAccessingSecurityScopedResource()

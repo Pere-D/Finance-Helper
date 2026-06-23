@@ -75,117 +75,219 @@ private enum ZugerKBParser {
         return f
     }()
 
+    // MARK: - PDF Support Types
+
+    private struct PDFToken {
+        let text: String
+        let xCenter: CGFloat
+    }
+
+    private struct PDFLine {
+        let tokens: [PDFToken]
+        var fullText: String { tokens.map(\.text).joined(separator: " ") }
+    }
+
     // MARK: - PDF Parsing (Einzeltransaktionen)
 
-    /// Parses the "Einzeltransaktionen" PDF export from Zuger Kantonalbank.
-    /// Format: header row "Datum Buchungstext Belastung Gutschrift Saldo CHF", followed by
-    /// transactions of the form:
-    ///   DD.MM.YYYY <description-line-1>
-    ///   [<description-line-2>]
-    ///   CHF <amount> <saldo>
-    /// Debit vs credit is derived from the saldo delta to the previous transaction.
+    /// Parses the Zuger Kantonalbank "Einzeltransaktionen" PDF.
+    /// Uses PDFKit character bounds to determine whether each amount is in the
+    /// Belastung (debit) or Gutschrift (credit) column — works without a Saldo column.
     static func parsePDF(data: Data) throws -> [BankTransaction] {
         guard let doc = PDFDocument(data: data) else { throw BankParseError.invalidFormat }
 
-        var fullText = ""
-        for i in 0..<doc.pageCount {
-            if let page = doc.page(at: i), let pageText = page.string {
-                fullText += pageText + "\n"
+        // Phase 1: Extract structured lines from all pages using character bounds.
+        var allLines: [PDFLine] = []
+        var belastungX: CGFloat = -1
+        var gutschriftX: CGFloat = -1
+
+        for pageIdx in 0..<doc.pageCount {
+            guard let page = doc.page(at: pageIdx),
+                  let pageStr = page.string, !pageStr.isEmpty else { continue }
+
+            let lines = extractPDFLines(from: page, string: pageStr)
+
+            // Calibrate column positions from the first header row found.
+            if belastungX < 0 {
+                for line in lines {
+                    if line.fullText.contains("Belastung") && line.fullText.contains("Gutschrift") {
+                        for tok in line.tokens {
+                            let t = tok.text.trimmingCharacters(in: .whitespaces)
+                            if t == "Belastung"  { belastungX  = tok.xCenter }
+                            if t == "Gutschrift" { gutschriftX = tok.xCenter }
+                        }
+                        break
+                    }
+                }
             }
-        }
-        guard !fullText.isEmpty else { throw BankParseError.invalidFormat }
-
-        // Anfangssaldo (starting balance) — parse on the original (pre-normalized) text.
-        var startingSaldo = 0.0
-        if let r = fullText.range(of: #"Anfangssaldo per \d{2}\.\d{2}\.\d{4}\s+CHF\s+(-?[\d']+\.\d{2})"#,
-                                    options: .regularExpression),
-           let amtR = fullText[r].range(of: #"(-?[\d']+\.\d{2})\s*$"#, options: .regularExpression) {
-            startingSaldo = Double(String(fullText[r][amtR]).replacingOccurrences(of: "'", with: "")) ?? 0
+            allLines.append(contentsOf: lines)
         }
 
-        // Collapse whitespace; PDFKit extracts the columns in an order where the description
-        // is split across the "CHF amount saldo" line (description part 1 BEFORE amount,
-        // description part 2 AFTER saldo).
-        let normalized = fullText
-            .replacingOccurrences(of: "\\s+", with: " ", options: .regularExpression)
-            .trimmingCharacters(in: .whitespaces)
+        // Midpoint between column headers → classifies amounts as debit or credit.
+        let colMid: CGFloat = (belastungX > 0 && gutschriftX > 0)
+            ? (belastungX + gutschriftX) / 2.0
+            : 420.0  // fallback for A4 page (~595pt wide)
 
-        // Trim to text AFTER the column header "Datum Buchungstext ... Saldo CHF".
-        // This skips Anfangs-/Schlusssaldo lines which also contain dates.
-        var workText = normalized
-        if let r = workText.range(of: "Datum Buchungstext Belastung Gutschrift Saldo CHF") {
-            workText = String(workText[r.upperBound...])
-        } else if let r = workText.range(of: "Saldo CHF") {
-            workText = String(workText[r.upperBound...])
+        // Amounts must be in the right portion of the page (Belastung or Gutschrift zone).
+        // This prevents amounts embedded inside descriptions (e.g. "EUR 45.00") from
+        // being mistaken for transaction amounts.
+        let amountZoneStart: CGFloat = belastungX > 0 ? belastungX - 40 : colMid - 50
+
+        guard let amtRegex  = try? NSRegularExpression(pattern: #"^[\d']+\.\d{2}$"#),
+              let dateRegex = try? NSRegularExpression(pattern: #"^\d{2}\.\d{2}\.\d{4}$"#),
+              let timeRegex = try? NSRegularExpression(pattern: #"^\d{2}:\d{2}$"#)
+        else { throw BankParseError.invalidFormat }
+
+        func matches(_ s: String, _ re: NSRegularExpression) -> Bool {
+            let ns = s as NSString
+            return re.firstMatch(in: s, range: NSRange(location: 0, length: ns.length)) != nil
         }
-
-        // Anchor on each transaction date (DD.MM.YYYY NOT followed by HH:MM time —
-        // excludes the timestamps inside the booking description like "11.05.2026 12:16").
-        let nsText = workText as NSString
-        // Exclude:
-        //  - dates followed by HH:MM (embedded dates with times in the description)
-        //  - dates followed directly by CHF (e.g. "12.05.2026 CHF 7.50" — phantom date when
-        //    PDFKit splits "DATE TIME" across line breaks, or the Anfangs-/Schlusssaldo lines)
-        guard let dateRegex = try? NSRegularExpression(pattern: #"\b\d{2}\.\d{2}\.\d{4}\b(?!\s*\d{1,2}:\d{2})(?!\s+CHF\b)"#),
-              let amtRegex  = try? NSRegularExpression(pattern: #"CHF\s+([\d']+\.\d{2})\s+(-?[\d']+\.\d{2})"#) else {
-            throw BankParseError.invalidFormat
+        func parseAmt(_ s: String) -> Double? {
+            matches(s, amtRegex) ? Double(s.replacingOccurrences(of: "'", with: "")) : nil
         }
-
-        let dateMatches = dateRegex.matches(in: workText, range: NSRange(location: 0, length: nsText.length))
+        func isColumnAmt(_ tok: PDFToken) -> Bool {
+            parseAmt(tok.text) != nil && tok.xCenter >= amountZoneStart
+        }
 
         var result: [BankTransaction] = []
-        var previousSaldo = startingSaldo
+        var curDate: Date?    = nil
+        var curDesc: [String] = []
+        var curAmt:  Double?  = nil
+        var curIsCredit = false
 
-        for idx in 0..<dateMatches.count {
-            let dateRange = dateMatches[idx].range
-            let chunkStart = dateRange.location
-            let chunkEnd   = (idx + 1 < dateMatches.count) ? dateMatches[idx + 1].range.location : nsText.length
-            let chunkLen   = chunkEnd - chunkStart
-            guard chunkLen > 0 else { continue }
-
-            let chunk = nsText.substring(with: NSRange(location: chunkStart, length: chunkLen))
-            let chunkNS = chunk as NSString
-            let dateStr = nsText.substring(with: dateRange)
-            guard let date = dateFmtFull.date(from: dateStr) else { continue }
-
-            // Find "CHF AMOUNT SALDO" within this chunk
-            guard let amtMatch = amtRegex.firstMatch(in: chunk, range: NSRange(location: 0, length: chunkNS.length)) else {
-                continue
-            }
-            let amtStr   = chunkNS.substring(with: amtMatch.range(at: 1)).replacingOccurrences(of: "'", with: "")
-            let saldoStr = chunkNS.substring(with: amtMatch.range(at: 2)).replacingOccurrences(of: "'", with: "")
-            guard let amount = Double(amtStr), let saldo = Double(saldoStr) else { continue }
-
-            // Description = everything in the chunk except the date prefix and the CHF amount triplet.
-            // (We drop the post-saldo description trailer to avoid pulling in page footer/header text
-            //  that PDFKit places between transactions on page breaks.)
-            let descStart = dateRange.length  // length of the date string (10)
-            let descLen = amtMatch.range.location - descStart
-            var desc = ""
-            if descLen > 0 {
-                desc = chunkNS.substring(with: NSRange(location: descStart, length: descLen))
-                    .trimmingCharacters(in: .whitespaces)
-            }
-            if desc.isEmpty { desc = dateStr }  // fallback
-
-            let delta = saldo - previousSaldo
-            let signedAmount: Double = (delta < 0) ? -amount : amount
-
-            let category = Categorizer.categorize(description: desc, amount: signedAmount)
-            let merchant = Categorizer.extractMerchant(from: desc)
+        func commit() {
+            guard let d = curDate, let a = curAmt else { return }
+            let desc = curDesc.joined(separator: " ").trimmingCharacters(in: .whitespaces)
+            let signed = curIsCredit ? a : -a
+            let cat = Categorizer.categorize(description: desc, amount: signed)
+            let mer = Categorizer.extractMerchant(from: desc)
             result.append(BankTransaction(
-                date: date,
-                description: desc,
-                rawAmount: signedAmount,
-                valueDate: date,
-                category: category,
-                merchantName: merchant
+                date: d,
+                description: desc.isEmpty ? "Transaktion" : desc,
+                rawAmount: signed,
+                valueDate: d,
+                category: cat,
+                merchantName: mer
             ))
-            previousSaldo = saldo
         }
+
+        for line in allLines {
+            let tokens = line.tokens.filter { !$0.text.trimmingCharacters(in: .whitespaces).isEmpty }
+            guard !tokens.isEmpty else { continue }
+
+            // Skip structural / non-transaction lines.
+            let ft = line.fullText
+            if ft.contains("Belastung") && ft.contains("Gutschrift") { continue }
+            if ft.hasPrefix("Anfangssaldo") || ft.hasPrefix("Schlusssaldo") { continue }
+            if ft.contains("Seite") && (ft.contains(" von ") || ft.contains(" of ")) { continue }
+            if ft.contains("IBAN") || ft.contains("Einzeltransaktionen") { continue }
+            let firstTok = tokens[0].text.trimmingCharacters(in: .whitespaces)
+            if ft.contains("Kantonalbank") && !matches(firstTok, dateRegex) { continue }
+
+            let second = tokens.count > 1 ? tokens[1].text.trimmingCharacters(in: .whitespaces) : ""
+
+            // Start a new transaction when the first token is a date (DD.MM.YYYY) and is NOT
+            // immediately followed by a time token (HH:MM) — those are embedded timestamps.
+            if matches(firstTok, dateRegex) && !matches(second, timeRegex),
+               let date = dateFmtFull.date(from: firstTok) {
+                commit()
+                curDate = date
+                curDesc = []
+                curAmt  = nil
+                curIsCredit = false
+
+                for tok in tokens.dropFirst() {
+                    let t = tok.text.trimmingCharacters(in: .whitespaces)
+                    if isColumnAmt(tok), let amt = parseAmt(t) {
+                        curAmt = amt
+                        curIsCredit = tok.xCenter > colMid
+                    } else if !t.isEmpty && !matches(t, timeRegex) {
+                        curDesc.append(t)
+                    }
+                }
+            } else if curDate != nil {
+                // Continuation / multi-line description line.
+                for tok in tokens {
+                    let t = tok.text.trimmingCharacters(in: .whitespaces)
+                    if isColumnAmt(tok), curAmt == nil, let amt = parseAmt(t) {
+                        curAmt = amt
+                        curIsCredit = tok.xCenter > colMid
+                    } else if !t.isEmpty && !matches(t, dateRegex) {
+                        curDesc.append(t)
+                    }
+                }
+            }
+        }
+        commit()
 
         guard !result.isEmpty else { throw BankParseError.noTransactionsFound }
         return result.sorted { $0.date > $1.date }
+    }
+
+    // MARK: - Character-Bounds Line Extraction
+
+    /// Reconstructs PDF table rows from character positions.
+    /// Groups characters by y-coordinate into lines, then by x-gap into tokens.
+    /// A gap > 12pt between consecutive characters starts a new token (column gap).
+    private static func extractPDFLines(from page: PDFPage, string pageStr: String) -> [PDFLine] {
+        let nsStr = pageStr as NSString
+        let length = nsStr.length
+        guard length > 0 else { return [] }
+
+        struct CP { let ch: unichar; let x: CGFloat; let y: CGFloat; let w: CGFloat }
+        var cps: [CP] = []
+        cps.reserveCapacity(length)
+        for i in 0..<length {
+            let b = page.characterBounds(at: i)
+            guard b.width > 0 || b.height > 0 else { continue }
+            cps.append(CP(ch: nsStr.character(at: i), x: b.minX, y: b.midY, w: b.width))
+        }
+        guard !cps.isEmpty else { return [] }
+
+        // Group by y with ±3pt tolerance; higher y in PDF space = higher on page.
+        var yBuckets: [(y: CGFloat, cps: [CP])] = []
+        for cp in cps {
+            if let idx = yBuckets.firstIndex(where: { abs($0.y - cp.y) < 3 }) {
+                yBuckets[idx].cps.append(cp)
+            } else {
+                yBuckets.append((cp.y, [cp]))
+            }
+        }
+        yBuckets.sort { $0.y > $1.y }  // descending y = top-to-bottom reading order
+
+        let gapThreshold: CGFloat = 12
+        var lines: [PDFLine] = []
+
+        for bucket in yBuckets {
+            let sorted = bucket.cps.sorted { $0.x < $1.x }
+
+            var tokens: [PDFToken] = []
+            var tokText = ""
+            var tokXMin: CGFloat = 0
+            var tokXMax: CGFloat = 0
+            var prevXEnd: CGFloat = -1
+
+            for cp in sorted {
+                guard cp.ch >= 0x20,
+                      let scalar = Unicode.Scalar(UInt32(cp.ch)) else { continue }
+                let char = Character(scalar)
+
+                if prevXEnd < 0 {
+                    tokText = String(char); tokXMin = cp.x; tokXMax = cp.x + cp.w; prevXEnd = tokXMax
+                } else if cp.x - prevXEnd > gapThreshold {
+                    let t = tokText.trimmingCharacters(in: .whitespaces)
+                    if !t.isEmpty { tokens.append(PDFToken(text: t, xCenter: (tokXMin + tokXMax) / 2)) }
+                    tokText = String(char); tokXMin = cp.x; tokXMax = cp.x + cp.w; prevXEnd = tokXMax
+                } else {
+                    tokText.append(char)
+                    tokXMax = max(tokXMax, cp.x + cp.w)
+                    prevXEnd = max(prevXEnd, cp.x + cp.w)
+                }
+            }
+            let t = tokText.trimmingCharacters(in: .whitespaces)
+            if !t.isEmpty { tokens.append(PDFToken(text: t, xCenter: (tokXMin + tokXMax) / 2)) }
+            if !tokens.isEmpty { lines.append(PDFLine(tokens: tokens)) }
+        }
+        return lines
     }
 
     static func parse(content: String) throws -> [BankTransaction] {

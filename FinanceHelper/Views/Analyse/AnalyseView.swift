@@ -210,12 +210,13 @@ struct AnalyseView: View {
         allCustomCategories.filter { $0.profileID == activeProfileID }
     }
 
+    private static let shortDateFormatter: DateFormatter = {
+        let f = DateFormatter(); f.dateStyle = .short; f.locale = .current; return f
+    }()
+
     private var periodFilterLabel: String {
         if showCustomRange {
-            let fmt = DateFormatter()
-            fmt.dateStyle = .short
-            fmt.locale = Locale.current
-            return "\(fmt.string(from: customFrom)) – \(fmt.string(from: customTo))"
+            return "\(Self.shortDateFormatter.string(from: customFrom)) – \(Self.shortDateFormatter.string(from: customTo))"
         }
         return selectedPeriod.localizedName
     }

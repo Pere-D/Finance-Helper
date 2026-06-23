@@ -35,6 +35,7 @@ struct DashboardContentView: View {
     @State private var cachedHistoricalData: [ProjectionService.ChartPoint] = []
     @State private var cachedGoalMarkers: [GoalMarker] = []
     @State private var cachedGoalEntryMarkers: [GoalMarker] = []
+    @State private var refreshDebounce: Task<Void, Never>? = nil
 
     init(profileID: String) {
         self.profileID = profileID
@@ -98,14 +99,14 @@ struct DashboardContentView: View {
         }
         .fullScreenCover(isPresented: $showingAddBudgetEntry) { AddEditBudgetEntryView() }
         .fullScreenCover(isPresented: $showingPaywall) { PaywallView().environment(purchases) }
-        .onChange(of: accounts) { viewModel.accounts = accounts; viewModel.writeWidgetSnapshot(); refreshChartData() }
+        .onChange(of: accounts) { viewModel.accounts = accounts; viewModel.writeWidgetSnapshot(); scheduleRefresh() }
         .onChange(of: accounts.map(\.isVisible)) { viewModel.accounts = accounts }
-        .onChange(of: showingAccounts) { if !showingAccounts { viewModel.accounts = accounts; refreshChartData() } }
-        .onChange(of: budgetEntries) { viewModel.budgetEntries = budgetEntries; viewModel.writeWidgetSnapshot(); refreshChartData() }
-        .onChange(of: defaultCurrency) { viewModel.displayCurrency = defaultCurrency; viewModel.writeWidgetSnapshot(); refreshChartData() }
-        .onChange(of: transactions) { refreshChartData() }
-        .onChange(of: goals) { refreshChartData() }
-        .onChange(of: notgroschenMonths) { refreshChartData() }
+        .onChange(of: showingAccounts) { if !showingAccounts { viewModel.accounts = accounts; scheduleRefresh() } }
+        .onChange(of: budgetEntries) { viewModel.budgetEntries = budgetEntries; viewModel.writeWidgetSnapshot(); scheduleRefresh() }
+        .onChange(of: defaultCurrency) { viewModel.displayCurrency = defaultCurrency; viewModel.writeWidgetSnapshot(); scheduleRefresh() }
+        .onChange(of: transactions) { scheduleRefresh() }
+        .onChange(of: goals) { scheduleRefresh() }
+        .onChange(of: notgroschenMonths) { scheduleRefresh() }
         .onChange(of: chartMonths) { refreshChartData() }
         .onAppear {
             viewModel.accounts = accounts
@@ -412,6 +413,17 @@ struct DashboardContentView: View {
                 viewModel.convert(max(0, $1.balance), from: $1.currency, to: defaultCurrency)
             })
         return dominant?.customAccountType?.color ?? Color.primary
+    }
+
+    // Coalesces rapid-fire onChange triggers (e.g. on initial load when all @Query
+    // results arrive at once) into a single refreshChartData() call after 60 ms.
+    private func scheduleRefresh() {
+        refreshDebounce?.cancel()
+        refreshDebounce = Task { @MainActor in
+            try? await Task.sleep(nanoseconds: 60_000_000)
+            guard !Task.isCancelled else { return }
+            refreshChartData()
+        }
     }
 
     private func refreshChartData() {

@@ -27,7 +27,7 @@ final class DashboardViewModel {
     var excludeGoalEntries: Bool = false
 
     private var standaloneBudgetEntries: [BudgetEntry] {
-        budgetEntries.filter { $0.account == nil && $0.isActive }
+        budgetEntries.filter { $0.account == nil && $0.isCurrentlyActive }
     }
 
     // MARK: - Helper for Redundant Sums
@@ -148,7 +148,7 @@ final class DashboardViewModel {
         let today = cal.startOfDay(for: Date())
         var result: [Date: Double] = [:]
 
-        for entry in budgetEntries where entry.isActive {
+        for entry in budgetEntries where entry.isCurrentlyActive {
             if excludingGoals && entry.linkedGoalID != nil { continue }
             let curr = entry.account?.currency ?? entry.currencyOverride ?? displayCurrency
             let isIncome = entry.userCategory?.isIncome ?? entry.category.isIncomeCategory
@@ -291,7 +291,7 @@ final class DashboardViewModel {
             .filter { !$0.type.isLiability && ($0.type == .investment || $0.type == .krypto || $0.type == .depot || $0.type == .altersvorsorge) }
             .reduce(0.0) { sum, acc in
                 let s = acc.budgetEntries
-                    .filter { $0.isActive && $0.isSavingsEntry && $0.recurrence != .once && $0.transferToAccount == nil }
+                    .filter { $0.isCurrentlyActive && $0.isSavingsEntry && $0.recurrence != .once && $0.transferToAccount == nil }
                     .reduce(0.0) { $0 + convert($1.effectiveMonthlyAmount, from: acc.currency, to: displayCurrency) }
                 return sum + s
             }
@@ -299,7 +299,7 @@ final class DashboardViewModel {
         func oneTimeMap(for accts: [Account], isLiquidBucket: Bool) -> [Int: Double] {
             let ids = Set(accts.map { ObjectIdentifier($0) })
             var result: [Int: Double] = [:]
-            for entry in budgetEntries where entry.isActive {
+            for entry in budgetEntries where entry.isCurrentlyActive {
                 let belongsHere = entry.account.map { ids.contains(ObjectIdentifier($0)) } ?? isLiquidBucket
                 guard belongsHere else { continue }
                 
@@ -454,7 +454,7 @@ final class DashboardViewModel {
             return sum + convert(exp, from: acc.currency, to: displayCurrency)
         }
         let fromBudgetEntries = budgetEntries.filter { e in
-            guard e.isActive, e.recurrence != .once else { return false }
+            guard e.isCurrentlyActive, e.recurrence != .once else { return false }
             return !e.isIncomeEntry && !e.isSavingsEntry && e.transferToAccount == nil
         }.reduce(0.0) { sum, e in
             let curr = e.account?.currency ?? e.currencyOverride ?? displayCurrency

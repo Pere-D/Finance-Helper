@@ -261,6 +261,9 @@ struct PaywallView: View {
                     Link("Datenschutz", destination: URL(string: "https://financehelper.ch/datenschutz/")!)
                         .font(.caption)
                         .foregroundStyle(.white.opacity(0.35))
+                    Link("Nutzungsbedingungen", destination: URL(string: "https://www.apple.com/legal/internet-services/itunes/dev/stdeula/")!)
+                        .font(.caption)
+                        .foregroundStyle(.white.opacity(0.35))
                 }
                 .padding(.top, 10)
 

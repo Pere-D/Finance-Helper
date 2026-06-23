@@ -193,11 +193,15 @@ struct BudgetPlannerView: View {
         selectedBudgetMonth = Calendar.current.date(byAdding: .month, value: offset, to: selectedBudgetMonth) ?? selectedBudgetMonth
     }
 
+    private static let monthYearFormatter: DateFormatter = {
+        let f = DateFormatter()
+        f.dateFormat = "MMMM yyyy"
+        f.locale = .current
+        return f
+    }()
+
     private var selectedMonthLabel: String {
-        let fmt = DateFormatter()
-        fmt.dateFormat = "MMMM yyyy"
-        fmt.locale = Locale.current
-        return fmt.string(from: selectedBudgetMonth)
+        Self.monthYearFormatter.string(from: selectedBudgetMonth)
     }
 
     private var displayedEntries: [BudgetEntry] {
@@ -2035,11 +2039,15 @@ private struct BudgetVizSheet: View {
         sheetMonth = Calendar.current.date(byAdding: .month, value: offset, to: sheetMonth) ?? sheetMonth
     }
 
+    private static let monthYearFormatter: DateFormatter = {
+        let f = DateFormatter()
+        f.dateFormat = "MMMM yyyy"
+        f.locale = .current
+        return f
+    }()
+
     private var selectedMonthLabel: String {
-        let fmt = DateFormatter()
-        fmt.dateFormat = "MMMM yyyy"
-        fmt.locale = Locale.current
-        return fmt.string(from: sheetMonth)
+        Self.monthYearFormatter.string(from: sheetMonth)
     }
 
     private static let fallbackRates: [String: Double] = [

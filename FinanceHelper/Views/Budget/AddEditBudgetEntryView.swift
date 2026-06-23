@@ -267,11 +267,11 @@ struct AddEditBudgetEntryView: View {
     }
 
     private static func monthName(_ month: Int) -> String {
-        DateFormatter().monthSymbols[month - 1]
+        Calendar.current.monthSymbols[month - 1]
     }
 
     private static func shortMonthName(_ month: Int) -> String {
-        DateFormatter().shortMonthSymbols[month - 1]
+        Calendar.current.shortMonthSymbols[month - 1]
     }
 
     private var accountSection: some View {
